@@ -1,0 +1,42 @@
+# Compiled binaries
+/cogriaclaw
+/cogriaclaw-*
+/dist/
+/bin/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# Go workspace files (we ship a single module, no go.work)
+go.work
+go.work.sum
+
+# Runtime state
+/data/
+/auth/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Config: only the example is committed; real config holds tokens
+config.yaml
+config.local.yaml
+.env
+.env.*
+
+# Local-only docs (Chinese internal notes)
+/localdocs/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
