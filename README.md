@@ -33,6 +33,10 @@
 
 Early development. Architecture is settled; implementation in progress.
 
+## Disclaimer
+
+cogriaclaw is **not affiliated with** WhatsApp, Meta, or Anthropic. It uses the third-party [whatsmeow](https://github.com/tulir/whatsmeow) library to interact with WhatsApp's web protocol; running this software may violate WhatsApp's Terms of Service and could result in account suspension. Provided "as is" without warranty (see [LICENSE](./LICENSE)). Intended for personal, educational, and authorized-automation use only — not for unsolicited mass messaging.
+
 ## License
 
 [MIT](./LICENSE)

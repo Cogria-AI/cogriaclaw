@@ -33,6 +33,10 @@
 
 早期开发中，架构已定，代码实现进行中。
 
+## 免责声明
+
+cogriaclaw **与 WhatsApp、Meta、Anthropic 均无任何关联**。本项目通过第三方 [whatsmeow](https://github.com/tulir/whatsmeow) 库与 WhatsApp Web 协议交互；运行该软件可能违反 WhatsApp 服务条款，并可能导致账号被封禁。软件按"原样"提供，不附任何担保（详见 [LICENSE](./LICENSE)）。仅供个人、教育及经授权的自动化用途 —— **不得用于未经请求的群发消息**。
+
 ## 许可证
 
 [MIT](./LICENSE)
