@@ -37,36 +37,50 @@ func main() {
 		os.Exit(1)
 	}
 
-	f := filter.New(cfg.Filter.AllowedDMs)
+	requireMention := cfg.Filter.GroupRequireMentionResolved()
+	f := filter.New(cfg.Filter.AllowedDMs, cfg.Filter.AllowedGroups, requireMention)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	handler := func(ctx context.Context, msg wa.InboundMessage) {
-		slog.Info("rx",
-			"chat", msg.Chat.String(),
-			"sender", msg.Sender.String(),
-			"sender_alt", msg.SenderAlt.String(),
-			"sender_phone", msg.SenderPhone.String(),
-			"addr_mode", string(msg.AddressingMode),
-			"is_group", msg.IsGroup,
-			"is_from_me", msg.IsFromMe,
-			"text", msg.Text,
-		)
 		if ok, reason := f.ShouldHandle(msg); !ok {
-			slog.Info("drop", "reason", reason, "sender_phone_user", msg.SenderPhone.User)
+			// Drop logs intentionally omit message text and chat JID — the bot may sit
+			// silently in many groups, and we don't want to leak those IDs by default.
+			level := slog.LevelInfo
+			if msg.IsGroup {
+				level = slog.LevelDebug
+			}
+			slog.Log(ctx, level, "drop",
+				"reason", reason,
+				"is_group", msg.IsGroup,
+				"sender_phone", msg.SenderPhone.User,
+			)
 			return
 		}
-		slog.Info("pass → echo", "sender_phone_user", msg.SenderPhone.User)
+		slog.Info("rx",
+			"is_group", msg.IsGroup,
+			"sender_phone", msg.SenderPhone.User,
+			"mentioned_me", msg.MentionedMe,
+			"text", msg.Text,
+		)
 		if err := client.SendText(ctx, msg.Chat, "echo: "+msg.Text); err != nil {
 			slog.Error("send", "err", err)
 		}
 	}
 
-	slog.Info("starting cogriaclaw (phase 2: echo + DM allowlist)",
-		"raw_allowlist", cfg.Filter.AllowedDMs,
-		"normalized_allowlist", f.AllowedDMs(),
+	slog.Info("starting cogriaclaw",
+		"phase", "3 (echo + DM/group allowlist + mention gate)",
+		"dms", len(cfg.Filter.AllowedDMs),
+		"groups", len(cfg.Filter.AllowedGroups),
+		"group_require_mention", requireMention,
 	)
+	slog.Debug("filter detail",
+		"allowed_dms_raw", cfg.Filter.AllowedDMs,
+		"allowed_dms_normalized", f.AllowedDMs(),
+		"allowed_groups_normalized", f.AllowedGroups(),
+	)
+
 	if err := client.Start(ctx, handler); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("run", "err", err)
 		os.Exit(1)

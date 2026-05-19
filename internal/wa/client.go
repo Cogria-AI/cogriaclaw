@@ -131,9 +131,22 @@ func (c *Client) dispatchMessage(ctx context.Context, evt *events.Message) {
 	if c.handler == nil {
 		return
 	}
-	msg := extractInbound(evt)
+	msg := extractInbound(evt, c.selfJIDs())
 	if msg.Text == "" {
-		return // ignore receipts, reactions, non-text in phase 1
+		return // ignore receipts, reactions, non-text
 	}
 	c.handler(ctx, msg)
+}
+
+// selfJIDs returns the bot's own JIDs (PN and LID), zero values omitted.
+// Used for "@me" detection across addressing modes.
+func (c *Client) selfJIDs() []types.JID {
+	var out []types.JID
+	if c.wm.Store.ID != nil && !c.wm.Store.ID.IsEmpty() {
+		out = append(out, *c.wm.Store.ID)
+	}
+	if !c.wm.Store.LID.IsEmpty() {
+		out = append(out, c.wm.Store.LID)
+	}
+	return out
 }

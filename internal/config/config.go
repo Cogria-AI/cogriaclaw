@@ -27,7 +27,20 @@ type WAConfig struct {
 }
 
 type FilterConfig struct {
-	AllowedDMs []string `yaml:"allowed_dms"`
+	AllowedDMs          []string `yaml:"allowed_dms"`
+	AllowedGroups       []string `yaml:"allowed_groups"`
+	GroupRequireMention *bool    `yaml:"group_require_mention"` // pointer so absence-vs-false is distinguishable
+}
+
+// GroupRequireMentionResolved returns the configured value, defaulting to false.
+// The bot already requires a group to be explicitly allowlisted, so by default
+// it participates in conversation freely there (more natural interaction).
+// Set group_require_mention: true if you want strict @-only behaviour.
+func (f FilterConfig) GroupRequireMentionResolved() bool {
+	if f.GroupRequireMention == nil {
+		return false
+	}
+	return *f.GroupRequireMention
 }
 
 func Load(path string) (*Config, error) {

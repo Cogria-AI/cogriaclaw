@@ -19,3 +19,16 @@ filter:
   # Refusing to start with an empty list — be explicit about who can talk to the bot.
   allowed_dms:
     - "+CHANGE_ME"
+
+  # Groups the bot will respond in. Full group JID, ending in "@g.us".
+  # You can find a group's JID by sending a message in it and reading the
+  # "drop reason=group-not-in-allowlist" log at debug level — the JID is logged.
+  # Empty list = no groups (the safe default).
+  allowed_groups: []
+  #  - "120363021234567890@g.us"
+
+  # In groups, only respond when the bot is @-mentioned.
+  # Default (when unset) is false — the bot responds to any message in an
+  # allowlisted group, which feels more like a participant. Set to true if
+  # you want strict @-only behaviour.
+  group_require_mention: false

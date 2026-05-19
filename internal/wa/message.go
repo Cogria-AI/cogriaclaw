@@ -25,10 +25,14 @@ type InboundMessage struct {
 	AddressingMode types.AddressingMode // "pn" or "lid"
 	IsGroup        bool
 	IsFromMe       bool
+	MentionedMe    bool // self JID appears in ExtendedTextMessage.ContextInfo.MentionedJID
 	Text           string
 }
 
-func extractInbound(evt *events.Message) InboundMessage {
+// extractInbound builds an InboundMessage from a whatsmeow event. selfJIDs is the
+// bot's own JIDs (PN + LID, either of which may be zero) — used to detect "@me"
+// mentions across addressing modes.
+func extractInbound(evt *events.Message, selfJIDs []types.JID) InboundMessage {
 	out := InboundMessage{
 		ID:             evt.Info.ID,
 		Timestamp:      evt.Info.Timestamp,
@@ -46,7 +50,9 @@ func extractInbound(evt *events.Message) InboundMessage {
 		case evt.Message.Conversation != nil:
 			out.Text = evt.Message.GetConversation()
 		case evt.Message.ExtendedTextMessage != nil:
-			out.Text = evt.Message.GetExtendedTextMessage().GetText()
+			ext := evt.Message.GetExtendedTextMessage()
+			out.Text = ext.GetText()
+			out.MentionedMe = mentionsAny(ext.GetContextInfo().GetMentionedJID(), selfJIDs)
 		}
 	}
 	return out
@@ -62,4 +68,31 @@ func resolveSenderPhone(src types.MessageSource) types.JID {
 		return src.SenderAlt
 	}
 	return types.JID{}
+}
+
+// mentionsAny reports whether any of mentioned (raw JID strings from the proto)
+// matches one of selfJIDs after stripping device/agent suffixes.
+func mentionsAny(mentioned []string, selfJIDs []types.JID) bool {
+	if len(mentioned) == 0 || len(selfJIDs) == 0 {
+		return false
+	}
+	selfStrs := make([]string, 0, len(selfJIDs))
+	for _, j := range selfJIDs {
+		if !j.IsEmpty() {
+			selfStrs = append(selfStrs, j.ToNonAD().String())
+		}
+	}
+	for _, raw := range mentioned {
+		jid, err := types.ParseJID(raw)
+		if err != nil {
+			continue
+		}
+		norm := jid.ToNonAD().String()
+		for _, s := range selfStrs {
+			if norm == s {
+				return true
+			}
+		}
+	}
+	return false
 }
