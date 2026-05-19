@@ -1,0 +1,21 @@
+# cogriaclaw config — copy to config.yaml (git-ignored) and edit.
+#
+# Run with:
+#   cogriaclaw -config config.yaml
+# or (defaults to ./config.yaml):
+#   cogriaclaw
+
+log_level: info        # debug | info | warn | error
+
+data:
+  dir: data            # session DB + future runtime state live here
+
+whatsapp:
+  device_name: cogriaclaw
+
+filter:
+  # Only DMs whose sender's phone matches one of these are processed.
+  # Include the +country prefix. Whitespace and hyphens are ignored.
+  # Refusing to start with an empty list — be explicit about who can talk to the bot.
+  allowed_dms:
+    - "+CHANGE_ME"
