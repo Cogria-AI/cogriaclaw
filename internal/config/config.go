@@ -19,7 +19,15 @@ type Config struct {
 	Filter       FilterConfig          `yaml:"filter"`
 	LLM          LLMConfig             `yaml:"llm"`
 	Conversation ConversationConfig    `yaml:"conversation"`
+	API          APIConfig             `yaml:"api"`
 	Skills       map[string]SkillEntry `yaml:"skills"`
+}
+
+// APIConfig controls the optional HTTP control surface. When Listen is empty
+// the server is not started at all.
+type APIConfig struct {
+	Listen string `yaml:"listen"` // e.g. 127.0.0.1:8787; empty = API disabled
+	Token  string `yaml:"token"`  // bearer token for /send and /trigger; supports ${ENV_NAME}
 }
 
 // ConversationConfig controls short-term, in-memory conversation history.
@@ -111,6 +119,7 @@ func Load(path string) (*Config, error) {
 	// could accidentally rewrite user-authored content like system prompts.
 	cfg.LLM.APIKey = interpolateEnv(cfg.LLM.APIKey)
 	cfg.LLM.BaseURL = interpolateEnv(cfg.LLM.BaseURL)
+	cfg.API.Token = interpolateEnv(cfg.API.Token)
 	for name, entry := range cfg.Skills {
 		if m, ok := interpolateInTree(entry.Config).(map[string]any); ok {
 			entry.Config = m
@@ -127,6 +136,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.LLM.MaxToolHops < 1 || cfg.LLM.MaxToolHops > 20 {
 		return nil, fmt.Errorf("llm.max_tool_hops out of range (1-20): %d", cfg.LLM.MaxToolHops)
+	}
+	if cfg.API.Listen != "" && cfg.API.Token == "" {
+		return nil, errors.New("api.listen is set but api.token is empty — refusing to expose /send and /trigger without auth")
 	}
 
 	if len(cfg.Filter.AllowedDMs) == 0 && len(cfg.Filter.AllowedGroups) == 0 {

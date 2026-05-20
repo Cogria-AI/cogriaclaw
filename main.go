@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Cogria-AI/cogriaclaw/internal/api"
 	"github.com/Cogria-AI/cogriaclaw/internal/config"
 	"github.com/Cogria-AI/cogriaclaw/internal/dispatcher"
 	"github.com/Cogria-AI/cogriaclaw/internal/filter"
@@ -88,6 +90,27 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.API.Listen != "" {
+		apiServer := api.New(cfg.API.Listen, api.Deps{
+			WA:      client,
+			Skills:  registry,
+			Token:   cfg.API.Token,
+			Started: time.Now(),
+		})
+		go func() {
+			slog.Info("http api listening", "addr", cfg.API.Listen)
+			if err := apiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("http api", "err", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = apiServer.Shutdown(shutCtx)
+		}()
+	}
 
 	handler := func(ctx context.Context, msg wa.InboundMessage) {
 		if ok, reason := f.ShouldHandle(msg); !ok {

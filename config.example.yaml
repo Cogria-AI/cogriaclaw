@@ -50,6 +50,15 @@ llm:
     replies are read on a phone. When a request requires action, prefer
     calling a tool. Reply in the same language as the user.
 
+api:
+  # Optional HTTP control surface. Empty listen = disabled.
+  # Bind to localhost and put any public exposure behind your own tunnel/proxy.
+  #   GET  /healthz   status (no auth)
+  #   POST /send      {"to":"+447...|...@g.us","text":"hi"}            (bearer auth)
+  #   POST /trigger   {"skill":"http_get","input":{...},"notify":{"to":"+44..."}}  (bearer auth)
+  listen: ""                       # e.g. 127.0.0.1:8787
+  token: ${COGRIACLAW_API_TOKEN}   # required when listen is set; supports ${ENV_NAME}
+
 conversation:
   # Short-term, in-memory conversation history per chat. The session boundary
   # is command-controlled, not a fixed turn count: send reset_command to start

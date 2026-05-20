@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -102,6 +103,40 @@ func (c *Client) SendText(ctx context.Context, to types.JID, text string) error 
 		Conversation: proto.String(text),
 	})
 	return err
+}
+
+// IsConnected reports whether the underlying socket is currently connected.
+func (c *Client) IsConnected() bool { return c.wm.IsConnected() }
+
+// Self returns the bot's own phone-number JID (Store.ID), or zero before login.
+func (c *Client) Self() types.JID {
+	if c.wm.Store == nil || c.wm.Store.ID == nil {
+		return types.JID{}
+	}
+	return c.wm.Store.ID.ToNonAD()
+}
+
+// ParseTarget turns a user-supplied target string into a JID:
+//   - "...@g.us"            → group JID
+//   - "+447700900123" / digits / "447...@s.whatsapp.net" → user JID
+func ParseTarget(s string) (types.JID, error) {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return types.JID{}, errors.New("empty target")
+	}
+	if strings.Contains(t, "@") {
+		return types.ParseJID(t)
+	}
+	digits := strings.Builder{}
+	for _, r := range t {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	if digits.Len() == 0 {
+		return types.JID{}, fmt.Errorf("not a phone number or JID: %q", s)
+	}
+	return types.NewJID(digits.String(), types.DefaultUserServer), nil
 }
 
 func (c *Client) qrLogin(ctx context.Context) error {
