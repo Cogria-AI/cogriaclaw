@@ -16,14 +16,11 @@ whatsapp:
 filter:
   # Only DMs whose sender's phone matches one of these are processed.
   # Include the +country prefix. Whitespace and hyphens are ignored.
-  # Refusing to start with an empty list — be explicit about who can talk to the bot.
   allowed_dms:
     - "+CHANGE_ME"
 
   # Groups the bot will respond in. Full group JID, ending in "@g.us".
-  # You can find a group's JID by sending a message in it and reading the
-  # "drop reason=group-not-in-allowlist" log at debug level — the JID is logged.
-  # Empty list = no groups (the safe default).
+  # Empty list = no groups.
   allowed_groups: []
   #  - "120363021234567890@g.us"
 
@@ -32,3 +29,51 @@ filter:
   # allowlisted group, which feels more like a participant. Set to true if
   # you want strict @-only behaviour.
   group_require_mention: false
+
+llm:
+  # Any OpenAI-Chat-Completions-compatible endpoint. Switch backend by changing
+  # base_url + model + api_key — no code change. Examples:
+  #   Kimi (coding):   base_url https://api.kimi.com/coding/v1   model kimi-for-coding
+  #   Moonshot:        base_url https://api.moonshot.ai/v1       model kimi-k2-...
+  #   OpenAI:          base_url ""  (default)                    model gpt-4o
+  #   DeepSeek:        base_url https://api.deepseek.com/v1      model deepseek-chat
+  #   local Ollama:    base_url http://localhost:11434/v1        model llama3.1
+  base_url: https://api.kimi.com/coding/v1
+  api_key: ${KIMI_API_KEY}         # supports ${ENV_NAME} interpolation; or paste the key directly
+  model: kimi-for-coding
+  headers:                         # optional per-backend headers; Kimi's coding endpoint requires this UA
+    User-Agent: KimiCLI/0.77
+  max_tokens: 4096                 # reasoning models spend budget on hidden reasoning too — keep this generous
+  max_tool_hops: 5                 # safety cap on tool-use rounds per message
+  system_prompt: |
+    You are an assistant operating inside a WhatsApp chat. Be concise —
+    replies are read on a phone. When a request requires action, prefer
+    calling a tool. Reply in the same language as the user.
+
+conversation:
+  # Short-term, in-memory conversation history per chat. The session boundary
+  # is command-controlled, not a fixed turn count: send reset_command to start
+  # fresh. Nothing is persisted — a restart clears all sessions.
+  enabled: true
+  reset_command: "/new"      # message that clears the current session
+  max_turns: 0               # 0 = unlimited (keep until reset); set N to cap context/token growth
+  idle_ttl_minutes: 0        # 0 = never auto-expire; e.g. 120 to auto-reset after 2h idle
+
+skills:
+  # Each block under skills.<name> can include `enabled: true|false` and an
+  # optional `config:` block. `config:` values support ${ENV_NAME} interpolation
+  # so secrets can live in env vars instead of the YAML file.
+  echo:
+    enabled: true
+  http_get:
+    enabled: true
+    config:
+      user_agent: cogriaclaw/0.1
+      timeout_sec: 10
+      max_bytes: 4096
+  # Example of a skill that would carry a secret:
+  # crm_lookup:
+  #   enabled: false
+  #   config:
+  #     api_base: https://crm.internal
+  #     api_token: ${CRM_API_TOKEN}

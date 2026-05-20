@@ -4,16 +4,30 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Cogria-AI/cogriaclaw/internal/config"
+	"github.com/Cogria-AI/cogriaclaw/internal/dispatcher"
 	"github.com/Cogria-AI/cogriaclaw/internal/filter"
+	"github.com/Cogria-AI/cogriaclaw/internal/llm"
+	"github.com/Cogria-AI/cogriaclaw/internal/session"
+	"github.com/Cogria-AI/cogriaclaw/internal/skills"
 	"github.com/Cogria-AI/cogriaclaw/internal/wa"
 )
+
+// skillFactories is the static catalogue of skills cogriaclaw knows how to
+// instantiate. Anything in the YAML config under `skills:` must appear here.
+// Adding a new skill = add a file in internal/skills and a line below.
+var skillFactories = map[string]skills.Factory{
+	"echo":     skills.NewEcho,
+	"http_get": skills.NewHTTPGet,
+}
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to YAML config file")
@@ -26,6 +40,25 @@ func main() {
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel(cfg.LogLevel)})))
+
+	registry, err := buildRegistry(cfg.Skills)
+	if err != nil {
+		slog.Error("build skill registry", "err", err)
+		os.Exit(1)
+	}
+
+	llmClient, err := llm.New(llm.Config{
+		BaseURL:     cfg.LLM.BaseURL,
+		APIKey:      cfg.LLM.APIKey,
+		Model:       cfg.LLM.Model,
+		MaxTokens:   cfg.LLM.MaxTokens,
+		MaxToolHops: cfg.LLM.MaxToolHops,
+		Headers:     cfg.LLM.Headers,
+	})
+	if err != nil {
+		slog.Error("init llm", "err", err)
+		os.Exit(1)
+	}
 
 	client, err := wa.New(wa.Config{
 		DataDir:    cfg.Data.Dir,
@@ -40,13 +73,24 @@ func main() {
 	requireMention := cfg.Filter.GroupRequireMentionResolved()
 	f := filter.New(cfg.Filter.AllowedDMs, cfg.Filter.AllowedGroups, requireMention)
 
+	var sessions *session.Store
+	if cfg.Conversation.Enabled {
+		sessions = session.NewStore(
+			cfg.Conversation.MaxTurns,
+			time.Duration(cfg.Conversation.IdleTTLMinutes)*time.Minute,
+		)
+	}
+	disp := dispatcher.New(client, llmClient, registry, dispatcher.Options{
+		SystemPrompt: resolveSystemPrompt(cfg.LLM.SystemPrompt),
+		Sessions:     sessions,
+		ResetCommand: cfg.Conversation.ResetCommand,
+	})
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	handler := func(ctx context.Context, msg wa.InboundMessage) {
 		if ok, reason := f.ShouldHandle(msg); !ok {
-			// Drop logs intentionally omit message text and chat JID — the bot may sit
-			// silently in many groups, and we don't want to leak those IDs by default.
 			level := slog.LevelInfo
 			if msg.IsGroup {
 				level = slog.LevelDebug
@@ -62,23 +106,26 @@ func main() {
 			"is_group", msg.IsGroup,
 			"sender_phone", msg.SenderPhone.User,
 			"mentioned_me", msg.MentionedMe,
-			"text", msg.Text,
 		)
-		if err := client.SendText(ctx, msg.Chat, "echo: "+msg.Text); err != nil {
-			slog.Error("send", "err", err)
-		}
+		// Each dispatch runs in its own goroutine so a slow LLM call doesn't
+		// block whatsmeow's event loop from processing the next message.
+		go disp.Handle(ctx, msg)
 	}
 
+	skillNames := make([]string, 0, len(registry.List()))
+	for _, s := range registry.List() {
+		skillNames = append(skillNames, s.Name)
+	}
 	slog.Info("starting cogriaclaw",
-		"phase", "3 (echo + DM/group allowlist + mention gate)",
+		"phase", "4 (llm + skills)",
+		"model", cfg.LLM.Model,
+		"max_tool_hops", cfg.LLM.MaxToolHops,
+		"skills", skillNames,
 		"dms", len(cfg.Filter.AllowedDMs),
 		"groups", len(cfg.Filter.AllowedGroups),
 		"group_require_mention", requireMention,
-	)
-	slog.Debug("filter detail",
-		"allowed_dms_raw", cfg.Filter.AllowedDMs,
-		"allowed_dms_normalized", f.AllowedDMs(),
-		"allowed_groups_normalized", f.AllowedGroups(),
+		"conversation", cfg.Conversation.Enabled,
+		"reset_command", cfg.Conversation.ResetCommand,
 	)
 
 	if err := client.Start(ctx, handler); err != nil && !errors.Is(err, context.Canceled) {
@@ -86,6 +133,48 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("stopped")
+}
+
+// buildRegistry instantiates skills listed in cfgSkills via the static factory
+// map. Disabled skills are skipped silently; unknown names error out so
+// typos in config don't disappear into the void.
+func buildRegistry(cfgSkills map[string]config.SkillEntry) (*skills.Registry, error) {
+	reg := skills.NewRegistry()
+	for name, entry := range cfgSkills {
+		if !entry.Enabled {
+			continue
+		}
+		factory, ok := skillFactories[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown skill %q in config (known: %v)", name, knownSkillNames())
+		}
+		s, err := factory(entry.Config)
+		if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", name, err)
+		}
+		if err := reg.Register(s); err != nil {
+			return nil, err
+		}
+	}
+	return reg, nil
+}
+
+func knownSkillNames() []string {
+	out := make([]string, 0, len(skillFactories))
+	for name := range skillFactories {
+		out = append(out, name)
+	}
+	return out
+}
+
+func resolveSystemPrompt(fromConfig string) string {
+	if strings.TrimSpace(fromConfig) != "" {
+		return fromConfig
+	}
+	return "You are an assistant operating inside a WhatsApp chat. " +
+		"Be concise — replies are read on a phone. " +
+		"When a request requires action, prefer calling a tool. " +
+		"Reply in the same language as the user."
 }
 
 func slogLevel(s string) slog.Level {
