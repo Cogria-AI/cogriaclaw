@@ -88,6 +88,13 @@ curl -XPOST localhost:8787/trigger -H "Authorization: Bearer $TOKEN" \
   -d '{"tool":"http_get","input":{"url":"https://example.com"},"notify":{"to":"+447700900123"}}'
 ```
 
+## Documentation
+
+- [Operations Guide](./docs/operations.md) — install, commands, logs, updating, troubleshooting
+- [Configuration](./docs/configuration.md) — config reference; changing the LLM model/provider/parameters
+- [Tools and Skills](./docs/skills.md) — the tool-vs-skill model, writing a SKILL.md
+- [HTTP API](./docs/api.md) — endpoints and triggering tasks
+
 ## Disclaimer
 
 cogriaclaw is **not affiliated with** WhatsApp, Meta, or Anthropic. It uses the third-party [whatsmeow](https://github.com/tulir/whatsmeow) library to interact with WhatsApp's web protocol; running this software may violate WhatsApp's Terms of Service and could result in account suspension. Provided "as is" without warranty (see [LICENSE](./LICENSE)). Intended for personal, educational, and authorized-automation use only — not for unsolicited mass messaging.
