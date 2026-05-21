@@ -106,6 +106,26 @@ func (c *Client) SendText(ctx context.Context, to types.JID, text string) error 
 	return err
 }
 
+// HasSession reports whether a paired WhatsApp session already exists in the
+// given data dir, without connecting. Used by `install` to decide between
+// prompting a QR login and reporting "already running".
+func HasSession(dataDir string) bool {
+	dbPath := filepath.Join(dataDir, "whatsmeow.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return false
+	}
+	store, err := sqlstore.New(context.Background(), "sqlite",
+		"file:"+dbPath+"?_pragma=foreign_keys(1)", waLog.Noop)
+	if err != nil {
+		return false
+	}
+	device, err := store.GetFirstDevice(context.Background())
+	if err != nil {
+		return false
+	}
+	return device.ID != nil
+}
+
 // IsConnected reports whether the underlying socket is currently connected.
 func (c *Client) IsConnected() bool { return c.wm.IsConnected() }
 

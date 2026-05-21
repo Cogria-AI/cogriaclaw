@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -97,21 +98,46 @@ type LLMConfig struct {
 	MaxToolHops  int               `yaml:"max_tool_hops"`
 }
 
+// DefaultConfigPath returns the config path to use when -config is not given:
+// the installed location (~/.cogriaclaw/config.yaml) if it exists, otherwise
+// ./config.yaml. This lets installed instances be controlled from any cwd.
+func DefaultConfigPath() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		p := filepath.Join(home, ".cogriaclaw", "config.yaml")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "config.yaml"
+}
+
 // PeekDataDir best-effort reads data.dir from a config file without running
-// full validation, defaulting to "data". Control commands (reload/stop/status)
-// use it to locate the PID file even if the rest of the config is invalid.
+// full validation, resolving it relative to the config file's directory and
+// defaulting to "<configdir>/data". Control commands use it to find the PID
+// file even if the rest of the config is invalid.
 func PeekDataDir(path string) string {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "data"
+	dir := "data"
+	if raw, err := os.ReadFile(path); err == nil {
+		var c struct {
+			Data DataConfig `yaml:"data"`
+		}
+		if yaml.Unmarshal(raw, &c) == nil && c.Data.Dir != "" {
+			dir = c.Data.Dir
+		}
 	}
-	var c struct {
-		Data DataConfig `yaml:"data"`
+	return resolveRelative(path, dir)
+}
+
+// resolveRelative returns dir unchanged if absolute, else joined to the
+// directory containing configPath.
+func resolveRelative(configPath, dir string) string {
+	if filepath.IsAbs(dir) {
+		return dir
 	}
-	if yaml.Unmarshal(raw, &c) == nil && c.Data.Dir != "" {
-		return c.Data.Dir
+	if abs, err := filepath.Abs(configPath); err == nil {
+		return filepath.Join(filepath.Dir(abs), dir)
 	}
-	return "data"
+	return dir
 }
 
 func Load(path string) (*Config, error) {
@@ -149,6 +175,11 @@ func Load(path string) (*Config, error) {
 	if cfg.Skills.Dir == "" {
 		cfg.Skills.Dir = "skills"
 	}
+	// Resolve data/skills dirs relative to the config file's location (not the
+	// process cwd), so an installed instance works regardless of where control
+	// commands are run from.
+	cfg.Data.Dir = resolveRelative(path, cfg.Data.Dir)
+	cfg.Skills.Dir = resolveRelative(path, cfg.Skills.Dir)
 	if cfg.Skills.Exec.TimeoutSec == 0 {
 		cfg.Skills.Exec.TimeoutSec = 30
 	}

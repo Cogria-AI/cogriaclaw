@@ -64,14 +64,16 @@ func main() {
 		cmdRun(args)
 	case "reload":
 		cmdSignal(args, syscall.SIGHUP, "reload")
+	case "start":
+		cmdStart(args)
 	case "stop":
-		cmdSignal(args, syscall.SIGTERM, "stop")
+		cmdStop(args)
 	case "restart":
 		cmdRestart(args)
 	case "status":
 		cmdStatus(args)
 	case "install":
-		cmdInstall(args)
+		fatalIf(installService(configFlag(args, "install", "config.yaml")))
 	case "uninstall":
 		fatalIf(daemon.Uninstall())
 	default:
@@ -85,27 +87,32 @@ func printHelp() {
 	fmt.Print(`cogriaclaw — a minimalist WhatsApp <-> LLM bridge
 
 Usage:
-  cogriaclaw [run] [-config FILE]   Run in the foreground (default command)
-  cogriaclaw reload  [-config FILE] Re-read config of the running instance (SIGHUP)
-  cogriaclaw stop    [-config FILE] Stop the running instance (SIGTERM)
-  cogriaclaw restart [-config FILE] Restart (service if installed, else stop+run)
-  cogriaclaw status  [-config FILE] Show whether an instance is running
-  cogriaclaw install [-config FILE] Install + start as a native service (launchd/systemd)
-  cogriaclaw uninstall              Stop + remove the native service
-  cogriaclaw help                   Show this help
-  cogriaclaw version                Show version
+  cogriaclaw [run] [-config FILE]   Run in the foreground (default; logs to terminal)
+  cogriaclaw install [-config FILE] Install to ~/.local/bin + ~/.cogriaclaw and register a service
+  cogriaclaw start                  Start the installed background service
+  cogriaclaw stop                   Stop it (service if installed, else the running process)
+  cogriaclaw restart                Restart it
+  cogriaclaw reload                 Re-read config of the running instance (SIGHUP, no disconnect)
+  cogriaclaw status                 Show whether an instance is running
+  cogriaclaw uninstall              Stop + remove the service
+  cogriaclaw help | version
 
 Flags:
-  -config FILE   Path to the YAML config (default: config.yaml)
+  -config FILE   Path to the YAML config (default: ~/.cogriaclaw/config.yaml if installed, else ./config.yaml)
+
+First-time setup (from your project directory):
+  cogriaclaw install     # copies binary + config + skills to your home dir
+  cogriaclaw run         # if not logged in: scan the QR, then Ctrl+C
+  cogriaclaw start       # run as a background service
 
 reload hot-applies: filter allowlists, skills, system prompt, LLM settings.
 A full restart is needed for: api.listen, data.dir, and the WhatsApp account.
 `)
 }
 
-func configFlag(args []string, name string) string {
+func configFlag(args []string, name, def string) string {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "path to YAML config file")
+	configPath := fs.String("config", def, "path to YAML config file")
 	_ = fs.Parse(args)
 	return *configPath
 }
@@ -114,8 +121,10 @@ func pidFileFor(configPath string) *daemon.PIDFile {
 	return daemon.NewPIDFile(filepath.Join(config.PeekDataDir(configPath), "cogriaclaw.pid"))
 }
 
+// cmdSignal sends a signal to the running process via its pid file. Used by
+// reload (SIGHUP) — works whether the instance is a service or standalone.
 func cmdSignal(args []string, sig syscall.Signal, name string) {
-	pf := pidFileFor(configFlag(args, name))
+	pf := pidFileFor(configFlag(args, name, config.DefaultConfigPath()))
 	pid, err := pf.Signal(sig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
@@ -124,8 +133,34 @@ func cmdSignal(args []string, sig syscall.Signal, name string) {
 	fmt.Printf("%s: signalled pid %d\n", name, pid)
 }
 
+func cmdStart(args []string) {
+	_ = configFlag(args, "start", config.DefaultConfigPath())
+	if !daemon.ServiceInstalled() {
+		fmt.Fprintln(os.Stderr, "start: no service installed — run 'cogriaclaw install' first, or 'cogriaclaw run' for foreground")
+		os.Exit(1)
+	}
+	fatalIf(daemon.StartService())
+	fmt.Println("start: service started")
+}
+
+func cmdStop(args []string) {
+	configPath := configFlag(args, "stop", config.DefaultConfigPath())
+	if daemon.ServiceInstalled() {
+		fatalIf(daemon.StopService())
+		fmt.Println("stop: service stopped")
+		return
+	}
+	pf := pidFileFor(configPath)
+	pid, err := pf.Signal(syscall.SIGTERM)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "stop:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("stop: signalled pid %d\n", pid)
+}
+
 func cmdStatus(args []string) {
-	pf := pidFileFor(configFlag(args, "status"))
+	pf := pidFileFor(configFlag(args, "status", config.DefaultConfigPath()))
 	if pid, ok := pf.RunningPID(); ok {
 		fmt.Printf("running (pid %d)\n", pid)
 		return
@@ -134,12 +169,8 @@ func cmdStatus(args []string) {
 	os.Exit(1)
 }
 
-func cmdInstall(args []string) {
-	fatalIf(daemon.Install(configFlag(args, "install")))
-}
-
 func cmdRestart(args []string) {
-	configPath := configFlag(args, "restart")
+	configPath := configFlag(args, "restart", config.DefaultConfigPath())
 	if daemon.ServiceInstalled() {
 		fatalIf(daemon.RestartService())
 		fmt.Println("restart: service restarted")
@@ -155,11 +186,11 @@ func cmdRestart(args []string) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	cmdRun([]string{"-config", configPath})
+	run(configPath)
 }
 
 func cmdRun(args []string) {
-	run(configFlag(args, "run"))
+	run(configFlag(args, "run", config.DefaultConfigPath()))
 }
 
 func fatalIf(err error) {
