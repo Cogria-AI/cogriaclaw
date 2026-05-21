@@ -38,6 +38,7 @@ type Client struct {
 	wm      *whatsmeow.Client
 	store   *sqlstore.Container
 	handler MessageHandler
+	dedup   *dedup
 }
 
 func New(cfg Config) (*Client, error) {
@@ -70,7 +71,7 @@ func New(cfg Config) (*Client, error) {
 	clientLog := waLog.Stdout("WA", logLevel, true)
 	wm := whatsmeow.NewClient(device, clientLog)
 
-	return &Client{cfg: cfg, wm: wm, store: store}, nil
+	return &Client{cfg: cfg, wm: wm, store: store, dedup: newDedup(4096)}, nil
 }
 
 // Start runs the QR login flow (if no saved session), connects, and dispatches
@@ -169,6 +170,9 @@ func (c *Client) dispatchMessage(ctx context.Context, evt *events.Message) {
 	msg := extractInbound(evt, c.selfJIDs())
 	if msg.Text == "" {
 		return // ignore receipts, reactions, non-text
+	}
+	if c.dedup.seenBefore(msg.ID) {
+		return // redelivered message (e.g. post-reconnect) — already handled
 	}
 	c.handler(ctx, msg)
 }
