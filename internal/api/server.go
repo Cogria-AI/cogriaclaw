@@ -13,14 +13,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Cogria-AI/cogriaclaw/internal/skills"
+	"github.com/Cogria-AI/cogriaclaw/internal/tool"
 	"github.com/Cogria-AI/cogriaclaw/internal/wa"
 )
 
 type Deps struct {
 	WA      *wa.Client
-	Skills  *skills.Registry
-	Token   string // bearer token; required for /send and /trigger
+	Tools   func() *tool.Registry // current tool registry (a getter so it survives config reload)
+	Token   string                // bearer token; required for /send and /trigger
 	Started time.Time
 }
 

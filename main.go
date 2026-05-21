@@ -9,58 +9,189 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/Cogria-AI/cogriaclaw/internal/api"
 	"github.com/Cogria-AI/cogriaclaw/internal/config"
+	"github.com/Cogria-AI/cogriaclaw/internal/daemon"
 	"github.com/Cogria-AI/cogriaclaw/internal/dispatcher"
 	"github.com/Cogria-AI/cogriaclaw/internal/filter"
 	"github.com/Cogria-AI/cogriaclaw/internal/llm"
 	"github.com/Cogria-AI/cogriaclaw/internal/session"
-	"github.com/Cogria-AI/cogriaclaw/internal/skills"
+	"github.com/Cogria-AI/cogriaclaw/internal/skill"
+	"github.com/Cogria-AI/cogriaclaw/internal/tool"
 	"github.com/Cogria-AI/cogriaclaw/internal/wa"
 )
 
-// skillFactories is the static catalogue of skills cogriaclaw knows how to
-// instantiate. Anything in the YAML config under `skills:` must appear here.
-// Adding a new skill = add a file in internal/skills and a line below.
-var skillFactories = map[string]skills.Factory{
-	"echo":     skills.NewEcho,
-	"http_get": skills.NewHTTPGet,
+var version = "dev"
+
+// toolFactories is the static catalogue of config-driven built-in tools.
+// Anything listed under `tools:` in the config must appear here. The skill
+// access tools read_file/run_script are registered separately (they need the
+// skills directory).
+var toolFactories = map[string]tool.Factory{
+	"http_get": tool.NewHTTPGet,
 }
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "path to YAML config file")
-	flag.Parse()
+	args := os.Args[1:]
 
-	cfg, err := config.Load(*configPath)
+	// Help / version short-circuits, in any position-0 form.
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			printHelp()
+			return
+		case "version", "-v", "--version":
+			fmt.Println("cogriaclaw", version)
+			return
+		}
+	}
+
+	// First non-flag arg is the command; default is "run".
+	cmd := "run"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd = args[0]
+		args = args[1:]
+	}
+
+	switch cmd {
+	case "run":
+		cmdRun(args)
+	case "reload":
+		cmdSignal(args, syscall.SIGHUP, "reload")
+	case "stop":
+		cmdSignal(args, syscall.SIGTERM, "stop")
+	case "restart":
+		cmdRestart(args)
+	case "status":
+		cmdStatus(args)
+	case "install":
+		cmdInstall(args)
+	case "uninstall":
+		fatalIf(daemon.Uninstall())
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
+		printHelp()
+		os.Exit(2)
+	}
+}
+
+func printHelp() {
+	fmt.Print(`cogriaclaw — a minimalist WhatsApp <-> LLM bridge
+
+Usage:
+  cogriaclaw [run] [-config FILE]   Run in the foreground (default command)
+  cogriaclaw reload  [-config FILE] Re-read config of the running instance (SIGHUP)
+  cogriaclaw stop    [-config FILE] Stop the running instance (SIGTERM)
+  cogriaclaw restart [-config FILE] Restart (service if installed, else stop+run)
+  cogriaclaw status  [-config FILE] Show whether an instance is running
+  cogriaclaw install [-config FILE] Install + start as a native service (launchd/systemd)
+  cogriaclaw uninstall              Stop + remove the native service
+  cogriaclaw help                   Show this help
+  cogriaclaw version                Show version
+
+Flags:
+  -config FILE   Path to the YAML config (default: config.yaml)
+
+reload hot-applies: filter allowlists, skills, system prompt, LLM settings.
+A full restart is needed for: api.listen, data.dir, and the WhatsApp account.
+`)
+}
+
+func configFlag(args []string, name string) string {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "path to YAML config file")
+	_ = fs.Parse(args)
+	return *configPath
+}
+
+func pidFileFor(configPath string) *daemon.PIDFile {
+	return daemon.NewPIDFile(filepath.Join(config.PeekDataDir(configPath), "cogriaclaw.pid"))
+}
+
+func cmdSignal(args []string, sig syscall.Signal, name string) {
+	pf := pidFileFor(configFlag(args, name))
+	pid, err := pf.Signal(sig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		os.Exit(1)
+	}
+	fmt.Printf("%s: signalled pid %d\n", name, pid)
+}
+
+func cmdStatus(args []string) {
+	pf := pidFileFor(configFlag(args, "status"))
+	if pid, ok := pf.RunningPID(); ok {
+		fmt.Printf("running (pid %d)\n", pid)
+		return
+	}
+	fmt.Println("not running")
+	os.Exit(1)
+}
+
+func cmdInstall(args []string) {
+	fatalIf(daemon.Install(configFlag(args, "install")))
+}
+
+func cmdRestart(args []string) {
+	configPath := configFlag(args, "restart")
+	if daemon.ServiceInstalled() {
+		fatalIf(daemon.RestartService())
+		fmt.Println("restart: service restarted")
+		return
+	}
+	// Standalone: stop the running instance (if any), then run in the foreground.
+	pf := pidFileFor(configPath)
+	if _, err := pf.Signal(syscall.SIGTERM); err == nil {
+		for i := 0; i < 50; i++ {
+			if _, ok := pf.RunningPID(); !ok {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	cmdRun([]string{"-config", configPath})
+}
+
+func cmdRun(args []string) {
+	run(configFlag(args, "run"))
+}
+
+func fatalIf(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// handlerState bundles the config-derived pieces that a SIGHUP reload swaps out
+// atomically. The WhatsApp client, session store, API binding, and PID file are
+// stable across reloads and live in run().
+type handlerState struct {
+	filter   *filter.Filter
+	disp     *dispatcher.Dispatcher
+	registry *tool.Registry
+}
+
+func run(configPath string) {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("load config", "err", err)
 		os.Exit(1)
 	}
-
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel(cfg.LogLevel)})))
 
-	registry, err := buildRegistry(cfg.Skills)
-	if err != nil {
-		slog.Error("build skill registry", "err", err)
+	pf := daemon.NewPIDFile(filepath.Join(cfg.Data.Dir, "cogriaclaw.pid"))
+	if err := pf.Acquire(); err != nil {
+		slog.Error("start", "err", err)
 		os.Exit(1)
 	}
-
-	llmClient, err := llm.New(llm.Config{
-		BaseURL:     cfg.LLM.BaseURL,
-		APIKey:      cfg.LLM.APIKey,
-		Model:       cfg.LLM.Model,
-		MaxTokens:   cfg.LLM.MaxTokens,
-		MaxToolHops: cfg.LLM.MaxToolHops,
-		Headers:     cfg.LLM.Headers,
-	})
-	if err != nil {
-		slog.Error("init llm", "err", err)
-		os.Exit(1)
-	}
+	defer pf.Release()
 
 	client, err := wa.New(wa.Config{
 		DataDir:    cfg.Data.Dir,
@@ -72,9 +203,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	requireMention := cfg.Filter.GroupRequireMentionResolved()
-	f := filter.New(cfg.Filter.AllowedDMs, cfg.Filter.AllowedGroups, requireMention)
-
 	var sessions *session.Store
 	if cfg.Conversation.Enabled {
 		sessions = session.NewStore(
@@ -82,19 +210,46 @@ func main() {
 			time.Duration(cfg.Conversation.IdleTTLMinutes)*time.Minute,
 		)
 	}
-	disp := dispatcher.New(client, llmClient, registry, dispatcher.Options{
-		SystemPrompt: resolveSystemPrompt(cfg.LLM.SystemPrompt),
-		Sessions:     sessions,
-		ResetCommand: cfg.Conversation.ResetCommand,
-	})
+
+	var state atomic.Pointer[handlerState]
+	st, err := buildState(cfg, client, sessions)
+	if err != nil {
+		slog.Error("build runtime", "err", err)
+		os.Exit(1)
+	}
+	state.Store(st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// SIGHUP → reload config and swap reloadable state. A bad new config is
+	// logged and ignored, keeping the running config intact.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			slog.Info("reload: SIGHUP received")
+			newCfg, err := config.Load(configPath)
+			if err != nil {
+				slog.Error("reload: config invalid, keeping current", "err", err)
+				continue
+			}
+			ns, err := buildState(newCfg, client, sessions)
+			if err != nil {
+				slog.Error("reload: build failed, keeping current", "err", err)
+				continue
+			}
+			state.Store(ns)
+			slog.Info("reload: applied",
+				"tools", toolNames(ns.registry),
+			)
+		}
+	}()
+
 	if cfg.API.Listen != "" {
 		apiServer := api.New(cfg.API.Listen, api.Deps{
 			WA:      client,
-			Skills:  registry,
+			Tools:   func() *tool.Registry { return state.Load().registry },
 			Token:   cfg.API.Token,
 			Started: time.Now(),
 		})
@@ -113,42 +268,31 @@ func main() {
 	}
 
 	handler := func(ctx context.Context, msg wa.InboundMessage) {
-		if ok, reason := f.ShouldHandle(msg); !ok {
+		s := state.Load()
+		if ok, reason := s.filter.ShouldHandle(msg); !ok {
 			level := slog.LevelInfo
 			if msg.IsGroup {
 				level = slog.LevelDebug
 			}
-			slog.Log(ctx, level, "drop",
-				"reason", reason,
-				"is_group", msg.IsGroup,
-				"sender_phone", msg.SenderPhone.User,
-			)
+			slog.Log(ctx, level, "drop", "reason", reason, "is_group", msg.IsGroup, "sender_phone", msg.SenderPhone.User)
 			return
 		}
-		slog.Info("rx",
-			"is_group", msg.IsGroup,
-			"sender_phone", msg.SenderPhone.User,
-			"mentioned_me", msg.MentionedMe,
-		)
+		slog.Info("rx", "is_group", msg.IsGroup, "sender_phone", msg.SenderPhone.User, "mentioned_me", msg.MentionedMe)
 		// Each dispatch runs in its own goroutine so a slow LLM call doesn't
-		// block whatsmeow's event loop from processing the next message.
-		go disp.Handle(ctx, msg)
+		// block whatsmeow's event loop.
+		go s.disp.Handle(ctx, msg)
 	}
 
-	skillNames := make([]string, 0, len(registry.List()))
-	for _, s := range registry.List() {
-		skillNames = append(skillNames, s.Name)
-	}
+	cur := state.Load()
 	slog.Info("starting cogriaclaw",
-		"phase", "4 (llm + skills)",
+		"version", version,
+		"pid", os.Getpid(),
 		"model", cfg.LLM.Model,
-		"max_tool_hops", cfg.LLM.MaxToolHops,
-		"skills", skillNames,
+		"tools", toolNames(cur.registry),
 		"dms", len(cfg.Filter.AllowedDMs),
 		"groups", len(cfg.Filter.AllowedGroups),
-		"group_require_mention", requireMention,
 		"conversation", cfg.Conversation.Enabled,
-		"reset_command", cfg.Conversation.ResetCommand,
+		"api", cfg.API.Listen,
 	)
 
 	if err := client.Start(ctx, handler); err != nil && !errors.Is(err, context.Canceled) {
@@ -158,33 +302,93 @@ func main() {
 	slog.Info("stopped")
 }
 
-// buildRegistry instantiates skills listed in cfgSkills via the static factory
-// map. Disabled skills are skipped silently; unknown names error out so
-// typos in config don't disappear into the void.
-func buildRegistry(cfgSkills map[string]config.SkillEntry) (*skills.Registry, error) {
-	reg := skills.NewRegistry()
-	for name, entry := range cfgSkills {
+// buildState assembles the reloadable runtime (tools, skills, llm, dispatcher,
+// filter) from cfg. The WhatsApp client and session store are passed in because
+// they persist across reloads.
+func buildState(cfg *config.Config, client *wa.Client, sessions *session.Store) (*handlerState, error) {
+	registry, err := buildRegistry(cfg.Tools)
+	if err != nil {
+		return nil, err
+	}
+
+	catalog, warnings, err := skill.Load(cfg.Skills.Dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range warnings {
+		slog.Warn("skill skipped", "detail", w)
+	}
+	if !catalog.Empty() {
+		if err := registry.Register(tool.NewReadFile(catalog.Root())); err != nil {
+			return nil, err
+		}
+		if cfg.Skills.Exec.Enabled {
+			if err := registry.Register(tool.NewRunScript(catalog.Root(), cfg.Skills.Exec.TimeoutSec, cfg.Skills.Exec.MaxOutputBytes)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	llmClient, err := llm.New(llm.Config{
+		BaseURL:     cfg.LLM.BaseURL,
+		APIKey:      cfg.LLM.APIKey,
+		Model:       cfg.LLM.Model,
+		MaxTokens:   cfg.LLM.MaxTokens,
+		MaxToolHops: cfg.LLM.MaxToolHops,
+		Headers:     cfg.LLM.Headers,
+		Extra:       cfg.LLM.ExtraBody,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	systemPrompt := resolveSystemPrompt(cfg.LLM.SystemPrompt)
+	if block := catalog.PromptBlock(); block != "" {
+		systemPrompt = systemPrompt + "\n\n" + block
+	}
+	disp := dispatcher.New(client, llmClient, registry, dispatcher.Options{
+		SystemPrompt: systemPrompt,
+		Sessions:     sessions,
+		ResetCommand: cfg.Conversation.ResetCommand,
+	})
+
+	f := filter.New(cfg.Filter.AllowedDMs, cfg.Filter.AllowedGroups, cfg.Filter.GroupRequireMentionResolved())
+	return &handlerState{filter: f, disp: disp, registry: registry}, nil
+}
+
+func buildRegistry(cfgTools map[string]config.ToolEntry) (*tool.Registry, error) {
+	reg := tool.NewRegistry()
+	for name, entry := range cfgTools {
 		if !entry.Enabled {
 			continue
 		}
-		factory, ok := skillFactories[name]
+		factory, ok := toolFactories[name]
 		if !ok {
-			return nil, fmt.Errorf("unknown skill %q in config (known: %v)", name, knownSkillNames())
+			return nil, fmt.Errorf("unknown tool %q in config (known: %v)", name, knownToolNames())
 		}
-		s, err := factory(entry.Config)
+		t, err := factory(entry.Config)
 		if err != nil {
-			return nil, fmt.Errorf("skill %q: %w", name, err)
+			return nil, fmt.Errorf("tool %q: %w", name, err)
 		}
-		if err := reg.Register(s); err != nil {
+		if err := reg.Register(t); err != nil {
 			return nil, err
 		}
 	}
 	return reg, nil
 }
 
-func knownSkillNames() []string {
-	out := make([]string, 0, len(skillFactories))
-	for name := range skillFactories {
+func toolNames(reg *tool.Registry) []string {
+	list := reg.List()
+	out := make([]string, 0, len(list))
+	for _, t := range list {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+func knownToolNames() []string {
+	out := make([]string, 0, len(toolFactories))
+	for name := range toolFactories {
 		out = append(out, name)
 	}
 	return out

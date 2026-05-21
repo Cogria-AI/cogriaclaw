@@ -16,7 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 
-	"github.com/Cogria-AI/cogriaclaw/internal/skills"
+	"github.com/Cogria-AI/cogriaclaw/internal/tool"
 )
 
 type Config struct {
@@ -26,6 +26,7 @@ type Config struct {
 	MaxTokens   int
 	MaxToolHops int
 	Headers     map[string]string // extra request headers, e.g. {"User-Agent": "KimiCLI/0.77"} for Kimi's coding endpoint
+	Extra       map[string]any    // extra request-body fields merged into every chat completion (provider-specific knobs, e.g. {"thinking": {"type": "disabled"}})
 }
 
 type Client struct {
@@ -68,7 +69,7 @@ func New(cfg Config) (*Client, error) {
 // Run sends the conversation (system prompt + history, where the last history
 // entry is the new user message) and lets the model use the registered skills
 // as tools until it returns a tool-call-free message, or the hop cap is reached.
-func (c *Client) Run(ctx context.Context, system string, history []Message, registry *skills.Registry, sc *skills.Ctx) (Result, error) {
+func (c *Client) Run(ctx context.Context, system string, history []Message, registry *tool.Registry, sc *tool.Ctx) (Result, error) {
 	tools := buildTools(registry)
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
 	messages = append(messages, openai.SystemMessage(system))
@@ -119,6 +120,9 @@ func (c *Client) complete(ctx context.Context, messages []openai.ChatCompletionM
 	if len(tools) > 0 {
 		params.Tools = tools
 	}
+	if len(c.cfg.Extra) > 0 {
+		params.SetExtraFields(c.cfg.Extra)
+	}
 
 	resp, err := c.inner.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -130,7 +134,7 @@ func (c *Client) complete(ctx context.Context, messages []openai.ChatCompletionM
 	return resp.Choices[0].Message, resp.Choices[0].FinishReason, nil
 }
 
-func (c *Client) runTool(ctx context.Context, registry *skills.Registry, sc *skills.Ctx, name, argsJSON string) string {
+func (c *Client) runTool(ctx context.Context, registry *tool.Registry, sc *tool.Ctx, name, argsJSON string) string {
 	s, ok := registry.Get(name)
 	if !ok {
 		return fmt.Sprintf("tool error: unknown tool %q", name)
@@ -145,7 +149,7 @@ func (c *Client) runTool(ctx context.Context, registry *skills.Registry, sc *ski
 	return out
 }
 
-func buildTools(registry *skills.Registry) []openai.ChatCompletionToolUnionParam {
+func buildTools(registry *tool.Registry) []openai.ChatCompletionToolUnionParam {
 	list := registry.List()
 	tools := make([]openai.ChatCompletionToolUnionParam, 0, len(list))
 	for _, s := range list {

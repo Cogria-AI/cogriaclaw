@@ -13,14 +13,36 @@ import (
 )
 
 type Config struct {
-	LogLevel     string                `yaml:"log_level"`
-	Data         DataConfig            `yaml:"data"`
-	WhatsApp     WAConfig              `yaml:"whatsapp"`
-	Filter       FilterConfig          `yaml:"filter"`
-	LLM          LLMConfig             `yaml:"llm"`
-	Conversation ConversationConfig    `yaml:"conversation"`
-	API          APIConfig             `yaml:"api"`
-	Skills       map[string]SkillEntry `yaml:"skills"`
+	LogLevel     string               `yaml:"log_level"`
+	Data         DataConfig           `yaml:"data"`
+	WhatsApp     WAConfig             `yaml:"whatsapp"`
+	Filter       FilterConfig         `yaml:"filter"`
+	LLM          LLMConfig            `yaml:"llm"`
+	Conversation ConversationConfig   `yaml:"conversation"`
+	API          APIConfig            `yaml:"api"`
+	Tools        map[string]ToolEntry `yaml:"tools"`  // built-in function-calling primitives (http_get, …)
+	Skills       SkillsConfig         `yaml:"skills"` // SKILL.md folders + their access tools
+}
+
+// ToolEntry is one block under `tools:`. Config is the per-tool options block
+// (untyped here; each tool factory parses its own fields).
+type ToolEntry struct {
+	Enabled bool           `yaml:"enabled"`
+	Config  map[string]any `yaml:"config"`
+}
+
+// SkillsConfig points at the SKILL.md folder tree and controls the tools that
+// operate on it. read_file (read-only, jailed to Dir) is always available when
+// Dir resolves; run_script is opt-in via Exec.Enabled because it executes code.
+type SkillsConfig struct {
+	Dir  string     `yaml:"dir"`  // default "skills"
+	Exec ExecConfig `yaml:"exec"` // run_script tool
+}
+
+type ExecConfig struct {
+	Enabled        bool `yaml:"enabled"`
+	TimeoutSec     int  `yaml:"timeout_sec"`
+	MaxOutputBytes int  `yaml:"max_output_bytes"`
 }
 
 // APIConfig controls the optional HTTP control surface. When Listen is empty
@@ -65,20 +87,31 @@ func (f FilterConfig) GroupRequireMentionResolved() bool {
 // Switch backend (Kimi, Moonshot, DeepSeek, OpenAI, Groq, Ollama, …) by
 // changing base_url + model + api_key — no code change.
 type LLMConfig struct {
-	BaseURL      string            `yaml:"base_url"` // e.g. https://api.kimi.com/coding/v1; empty = OpenAI default
-	APIKey       string            `yaml:"api_key"`  // supports ${ENV_NAME} interpolation
-	Model        string            `yaml:"model"`    // e.g. kimi-for-coding
-	Headers      map[string]string `yaml:"headers"`  // extra request headers (e.g. User-Agent for Kimi's coding endpoint)
+	BaseURL      string            `yaml:"base_url"`   // e.g. https://api.kimi.com/coding/v1; empty = OpenAI default
+	APIKey       string            `yaml:"api_key"`    // supports ${ENV_NAME} interpolation
+	Model        string            `yaml:"model"`      // e.g. kimi-for-coding
+	Headers      map[string]string `yaml:"headers"`    // extra request headers (e.g. User-Agent for Kimi's coding endpoint)
+	ExtraBody    map[string]any    `yaml:"extra_body"` // extra request-body fields (provider-specific, e.g. thinking toggle)
 	SystemPrompt string            `yaml:"system_prompt"`
 	MaxTokens    int               `yaml:"max_tokens"`
 	MaxToolHops  int               `yaml:"max_tool_hops"`
 }
 
-// SkillEntry is one block under `skills:` in the YAML. Config is the per-skill
-// options block (untyped here; each skill factory parses its own fields).
-type SkillEntry struct {
-	Enabled bool           `yaml:"enabled"`
-	Config  map[string]any `yaml:"config"`
+// PeekDataDir best-effort reads data.dir from a config file without running
+// full validation, defaulting to "data". Control commands (reload/stop/status)
+// use it to locate the PID file even if the rest of the config is invalid.
+func PeekDataDir(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "data"
+	}
+	var c struct {
+		Data DataConfig `yaml:"data"`
+	}
+	if yaml.Unmarshal(raw, &c) == nil && c.Data.Dir != "" {
+		return c.Data.Dir
+	}
+	return "data"
 }
 
 func Load(path string) (*Config, error) {
@@ -113,17 +146,26 @@ func Load(path string) (*Config, error) {
 	if cfg.Conversation.ResetCommand == "" {
 		cfg.Conversation.ResetCommand = "/new"
 	}
+	if cfg.Skills.Dir == "" {
+		cfg.Skills.Dir = "skills"
+	}
+	if cfg.Skills.Exec.TimeoutSec == 0 {
+		cfg.Skills.Exec.TimeoutSec = 30
+	}
+	if cfg.Skills.Exec.MaxOutputBytes == 0 {
+		cfg.Skills.Exec.MaxOutputBytes = 8 * 1024
+	}
 
 	// ${ENV_NAME} interpolation. We apply it only to fields where it's expected
-	// (LLM api_key + everything under skills.*.config) — applying it broadly
-	// could accidentally rewrite user-authored content like system prompts.
+	// (LLM api_key, API token + everything under tools.*.config) — applying it
+	// broadly could rewrite user-authored content like system prompts.
 	cfg.LLM.APIKey = interpolateEnv(cfg.LLM.APIKey)
 	cfg.LLM.BaseURL = interpolateEnv(cfg.LLM.BaseURL)
 	cfg.API.Token = interpolateEnv(cfg.API.Token)
-	for name, entry := range cfg.Skills {
+	for name, entry := range cfg.Tools {
 		if m, ok := interpolateInTree(entry.Config).(map[string]any); ok {
 			entry.Config = m
-			cfg.Skills[name] = entry
+			cfg.Tools[name] = entry
 		}
 	}
 

@@ -1,4 +1,4 @@
-package skills
+package tool
 
 import (
 	"context"
@@ -18,27 +18,27 @@ type httpGetConfig struct {
 }
 
 // NewHTTPGet shows the secret-handling pattern even though this particular
-// skill takes no secrets: the closure captures `cfg` and `client` so per-call
+// tool takes no secrets: the closure captures `cfg` and `client` so per-call
 // invocations never re-read config or re-construct an http.Client.
-func NewHTTPGet(raw map[string]any) (Skill, error) {
+func NewHTTPGet(raw map[string]any) (Tool, error) {
 	cfg := httpGetConfig{
 		UserAgent:  "cogriaclaw/0.1",
 		TimeoutSec: 10,
 		MaxBytes:   4 * 1024,
 	}
-	if err := DecodeSkillConfig(raw, &cfg); err != nil {
-		return Skill{}, fmt.Errorf("http_get: %w", err)
+	if err := DecodeConfig(raw, &cfg); err != nil {
+		return Tool{}, fmt.Errorf("http_get: %w", err)
 	}
 	if cfg.TimeoutSec < 1 || cfg.TimeoutSec > 60 {
-		return Skill{}, fmt.Errorf("http_get: timeout_sec out of range (1-60): %d", cfg.TimeoutSec)
+		return Tool{}, fmt.Errorf("http_get: timeout_sec out of range (1-60): %d", cfg.TimeoutSec)
 	}
 	if cfg.MaxBytes < 256 || cfg.MaxBytes > 64*1024 {
-		return Skill{}, fmt.Errorf("http_get: max_bytes out of range (256-65536): %d", cfg.MaxBytes)
+		return Tool{}, fmt.Errorf("http_get: max_bytes out of range (256-65536): %d", cfg.MaxBytes)
 	}
 
 	client := &http.Client{Timeout: time.Duration(cfg.TimeoutSec) * time.Second}
 
-	return Skill{
+	return Tool{
 		Name:        "http_get",
 		Description: "Fetch a URL with HTTP GET and return its response body (truncated). Use for reading the visible text/JSON of a public web resource. Do not use for sending data, authentication, or any non-GET request.",
 		InputSchema: map[string]any{

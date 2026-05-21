@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Cogria-AI/cogriaclaw/internal/skills"
+	"github.com/Cogria-AI/cogriaclaw/internal/tool"
 	"github.com/Cogria-AI/cogriaclaw/internal/wa"
 )
 
@@ -50,7 +50,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 type triggerRequest struct {
-	Skill  string          `json:"skill"`
+	Tool   string          `json:"tool"`
 	Input  json.RawMessage `json:"input"`
 	Notify *struct {
 		To string `json:"to"`
@@ -63,13 +63,13 @@ func (s *Server) handleTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errBody(err.Error()))
 		return
 	}
-	if req.Skill == "" {
-		writeJSON(w, http.StatusBadRequest, errBody("skill is required"))
+	if req.Tool == "" {
+		writeJSON(w, http.StatusBadRequest, errBody("tool is required"))
 		return
 	}
-	sk, ok := s.deps.Skills.Get(req.Skill)
+	t, ok := s.deps.Tools().Get(req.Tool)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, errBody("unknown skill: "+req.Skill))
+		writeJSON(w, http.StatusNotFound, errBody("unknown tool: "+req.Tool))
 		return
 	}
 	input := req.Input
@@ -78,11 +78,11 @@ func (s *Server) handleTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// API-triggered run: no inbound message context.
-	sc := &skills.Ctx{WA: s.deps.WA, Inbound: nil}
-	result, err := sk.Run(r.Context(), sc, input)
+	sc := &tool.Ctx{WA: s.deps.WA, Inbound: nil}
+	result, err := t.Run(r.Context(), sc, input)
 	if err != nil {
-		slog.Error("api: skill run failed", "skill", req.Skill, "err", err)
-		writeJSON(w, http.StatusInternalServerError, errBody("skill failed: "+err.Error()))
+		slog.Error("api: tool run failed", "tool", req.Tool, "err", err)
+		writeJSON(w, http.StatusInternalServerError, errBody("tool failed: "+err.Error()))
 		return
 	}
 

@@ -43,6 +43,9 @@ llm:
   model: kimi-for-coding
   headers:                         # optional per-backend headers; Kimi's coding endpoint requires this UA
     User-Agent: KimiCLI/0.77
+  extra_body:                      # optional provider-specific request-body fields
+    thinking:
+      type: disabled               # Kimi/Moonshot reasoning toggle; disabling gives snappier chat replies
   max_tokens: 4096                 # reasoning models spend budget on hidden reasoning too — keep this generous
   max_tool_hops: 5                 # safety cap on tool-use rounds per message
   system_prompt: |
@@ -55,7 +58,7 @@ api:
   # Bind to localhost and put any public exposure behind your own tunnel/proxy.
   #   GET  /healthz   status (no auth)
   #   POST /send      {"to":"+447...|...@g.us","text":"hi"}            (bearer auth)
-  #   POST /trigger   {"skill":"http_get","input":{...},"notify":{"to":"+44..."}}  (bearer auth)
+  #   POST /trigger   {"tool":"http_get","input":{...},"notify":{"to":"+44..."}}  (bearer auth)
   listen: ""                       # e.g. 127.0.0.1:8787
   token: ${COGRIACLAW_API_TOKEN}   # required when listen is set; supports ${ENV_NAME}
 
@@ -68,21 +71,27 @@ conversation:
   max_turns: 0               # 0 = unlimited (keep until reset); set N to cap context/token growth
   idle_ttl_minutes: 0        # 0 = never auto-expire; e.g. 120 to auto-reset after 2h idle
 
-skills:
-  # Each block under skills.<name> can include `enabled: true|false` and an
-  # optional `config:` block. `config:` values support ${ENV_NAME} interpolation
-  # so secrets can live in env vars instead of the YAML file.
-  echo:
-    enabled: true
+tools:
+  # Built-in function-calling primitives the model can invoke directly. Each
+  # block can include `enabled: true|false` and an optional `config:` block;
+  # config values support ${ENV_NAME} interpolation so secrets stay in env vars.
   http_get:
     enabled: true
     config:
       user_agent: cogriaclaw/0.1
       timeout_sec: 10
       max_bytes: 4096
-  # Example of a skill that would carry a secret:
-  # crm_lookup:
-  #   enabled: false
-  #   config:
-  #     api_base: https://crm.internal
-  #     api_token: ${CRM_API_TOKEN}
+
+skills:
+  # Skills are SKILL.md folders under `dir`. Each skill = a markdown file with
+  # YAML frontmatter (name, description) + optional bundled scripts/docs. The
+  # model reads a skill's SKILL.md on demand (read_file) and follows it, using
+  # tools to act. See skills/server-time/ for a worked example.
+  dir: skills
+  exec:
+    # run_script lets the model execute scripts bundled inside a skill folder
+    # (jailed to `dir`, never arbitrary commands). It runs code — enable only
+    # if you trust every skill in `dir`. read_file (read-only) is always on.
+    enabled: true
+    timeout_sec: 30
+    max_output_bytes: 8192

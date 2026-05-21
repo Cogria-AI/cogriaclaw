@@ -1,7 +1,7 @@
 // Package dispatcher handles a filtered inbound WhatsApp message: maintain
 // short-term conversation history, run it through the LLM with skills as
 // tools, and send the final text back to the chat. Skills can also send their
-// own messages via the *wa.Client they receive in skills.Ctx.
+// own messages via the *wa.Client they receive in tool.Ctx.
 package dispatcher
 
 import (
@@ -12,14 +12,14 @@ import (
 
 	"github.com/Cogria-AI/cogriaclaw/internal/llm"
 	"github.com/Cogria-AI/cogriaclaw/internal/session"
-	"github.com/Cogria-AI/cogriaclaw/internal/skills"
+	"github.com/Cogria-AI/cogriaclaw/internal/tool"
 	"github.com/Cogria-AI/cogriaclaw/internal/wa"
 )
 
 type Dispatcher struct {
 	wa           *wa.Client
 	llm          *llm.Client
-	skills       *skills.Registry
+	skills       *tool.Registry
 	sysPrompt    string
 	sessions     *session.Store // nil when conversation history is disabled
 	resetCommand string
@@ -31,7 +31,7 @@ type Options struct {
 	ResetCommand string         // e.g. "/new"; ignored when Sessions is nil
 }
 
-func New(client *wa.Client, llmc *llm.Client, registry *skills.Registry, opts Options) *Dispatcher {
+func New(client *wa.Client, llmc *llm.Client, registry *tool.Registry, opts Options) *Dispatcher {
 	return &Dispatcher{
 		wa:           client,
 		llm:          llmc,
@@ -68,7 +68,7 @@ func (d *Dispatcher) Handle(ctx context.Context, msg wa.InboundMessage) {
 	}
 	history = append(history, userTurn)
 
-	sc := &skills.Ctx{WA: d.wa, Inbound: &msg}
+	sc := &tool.Ctx{WA: d.wa, Inbound: &msg}
 	res, err := d.llm.Run(ctx, d.sysPrompt, history, d.skills, sc)
 	if err != nil {
 		slog.Error("dispatch: llm run failed", "err", err, "chat", chat)
