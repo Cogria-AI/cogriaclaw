@@ -1,6 +1,6 @@
 # Tools and Skills
 
-cogriaclaw separates two things that are often conflated:
+CogriaClaw separates two things that are often conflated:
 
 - **Tools** are function-calling primitives the model invokes directly. They're
   Go code. Built in: `http_get`, `read_file`, `run_script`.

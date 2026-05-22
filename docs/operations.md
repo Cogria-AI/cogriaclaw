@@ -1,6 +1,6 @@
 # Operations Guide
 
-What cogriaclaw does, and how to install, run, and maintain it.
+What CogriaClaw does, and how to install, run, and maintain it.
 
 ## What it does
 

@@ -2,7 +2,7 @@
 
 An optional HTTP control surface so external systems can push messages or
 trigger tools on demand — without going through the LLM. This is how you wire
-cogriaclaw into other backends: "on event X, make the bot do Y and tell someone
+CogriaClaw into other backends: "on event X, make the bot do Y and tell someone
 in WhatsApp."
 
 ## Enabling
@@ -13,7 +13,7 @@ api:
   token: ${COGRIACLAW_API_TOKEN}  # required when listen is set
 ```
 
-cogriaclaw refuses to start if `listen` is set without a `token`. **Bind to
+CogriaClaw refuses to start if `listen` is set without a `token`. **Bind to
 localhost.** To reach it from outside, put it behind your own tunnel or reverse
 proxy (Cloudflare Tunnel, frp, nginx) — that's deliberately out of scope here.
 

@@ -1,6 +1,6 @@
 # Configuration
 
-cogriaclaw reads a single YAML file. When run without `-config`, it uses
+CogriaClaw reads a single YAML file. When run without `-config`, it uses
 `~/.cogriaclaw/config.yaml` if present (the installed location), otherwise
 `./config.yaml`. Start from [`config.example.yaml`](../config.example.yaml).
 
@@ -29,7 +29,7 @@ llm:
 
 ## `llm` — the language model
 
-cogriaclaw talks to any **OpenAI Chat Completions-compatible** endpoint. You
+CogriaClaw talks to any **OpenAI Chat Completions-compatible** endpoint. You
 switch backends entirely through config — no code change.
 
 ```yaml

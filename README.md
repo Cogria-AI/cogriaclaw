@@ -4,11 +4,15 @@
 
 </div>
 
-# cogriaclaw
+<p align="center">
+  <img src="./banner.png" alt="CogriaClaw" width="100%">
+</p>
+
+# CogriaClaw
 
 > A minimalist bridge between WhatsApp and Large Language Models. Lean. Practical. Not bloated.
 
-`cogriaclaw` is a single-binary Go service that wires a WhatsApp account to an LLM. It receives messages from approved contacts or groups, routes them through an LLM that can call tools and follow skills, and replies. A small HTTP API lets external systems push messages or trigger tasks on demand.
+CogriaClaw is a single-binary Go service that wires a WhatsApp account to an LLM. It receives messages from approved contacts or groups, routes them through an LLM that can call tools and follow skills, and replies. A small HTTP API lets external systems push messages or trigger tasks on demand.
 
 ## Principles
 
@@ -23,6 +27,22 @@
 - nginx-style process control: `reload` config without dropping the connection; self-installs as a launchd/systemd service
 - One config file. One process. One thing to debug
 
+## CogriaClaw vs. Openclaw
+
+CogriaClaw started as a lean re-implementation of **Openclaw**'s WhatsApp channel. Openclaw is a Node.js bot framework — a plugin/channel SDK that fans one codebase out across multiple messaging platforms and accounts. CogriaClaw keeps only the WhatsApp ↔ LLM path and deliberately drops the framework around it. It's a different design point, not a fork — pick by how much you actually need.
+
+| | CogriaClaw | Openclaw |
+|---|---|---|
+| Runtime | single static Go binary, no runtime deps | Node.js + npm dependency tree |
+| WhatsApp transport | [whatsmeow](https://github.com/tulir/whatsmeow) (pure-Go WA-Web protocol) | Baileys (`@whiskeysockets/baileys`) |
+| Scope | one WhatsApp account ↔ one LLM | multi-channel, multi-account bot framework |
+| Extensibility | built-in tools (Go) + `SKILL.md` skills | plugin / channel SDK |
+| Config | one `config.yaml` | layered plugin + channel config |
+| Ops | self-installs as launchd/systemd, hot `reload` | framework process model |
+| Footprint | ~20 MB binary, copy-and-run | Node runtime + `node_modules` |
+
+**Choose CogriaClaw** when you want a single account on a single box with the fewest moving parts. **Choose Openclaw** when you need several channels, several accounts, or its plugin ecosystem.
+
 ## Quick start
 
 Requires Go 1.23+ to build.
@@ -30,27 +50,35 @@ Requires Go 1.23+ to build.
 ```sh
 git clone https://github.com/Cogria-AI/cogriaclaw
 cd cogriaclaw
-go build -o cogriaclaw .
+go build -o cogriaclaw .              # or: make build (adds version info + strips the binary)
 
 cp config.example.yaml config.yaml   # then edit: allowlist, LLM key, etc.
 ./cogriaclaw run                      # scan the QR with WhatsApp → Linked Devices
 ```
 
+Building for another machine (e.g. a Linux server)? `make build-all` cross-compiles into `dist/` for darwin/linux × amd64/arm64; `make package` adds tarballs + checksums. CGO is off everywhere, so it's a pure cross-build — copy the binary over and run it.
+
 On first run a QR code prints in the terminal — scan it from **WhatsApp → Settings → Linked Devices → Link a Device**. The session is saved under `data/`, so later starts connect without a QR.
 
-Message the linked account from an allowlisted number and it replies via the LLM.
+Message the linked account from an allowlisted number and it replies via the LLM. `/new` (configurable) starts a fresh conversation.
 
 ### Run it as a service
 
+`install` copies the binary to `~/.local/bin`, the config + skills + session to `~/.cogriaclaw`, and registers a launchd (macOS) or systemd (Linux) user service. If you're already logged in it starts right away; otherwise log in once, then start it:
+
 ```sh
-./cogriaclaw install      # registers a launchd (macOS) / systemd (Linux) user service
-./cogriaclaw status
-./cogriaclaw reload       # re-read config without dropping the WhatsApp connection
-./cogriaclaw stop
-./cogriaclaw uninstall
+./cogriaclaw install      # install + register the service
+./cogriaclaw run          # first time only: scan the QR, then Ctrl+C
+cogriaclaw start          # start the background service
+
+cogriaclaw status         # is it running?
+cogriaclaw reload         # re-read config without dropping the WhatsApp connection
+cogriaclaw restart
+cogriaclaw stop
+cogriaclaw uninstall      # stop + remove the service
 ```
 
-`run` is foreground (logs to the terminal, stops when the terminal closes). `install` runs it in the background under the OS supervisor — survives logout/reboot, restarts on crash. See `cogriaclaw help` for all commands.
+`run` is foreground (logs to the terminal, stops when it closes). The installed service survives logout/reboot and restarts on crash. `reload` (SIGHUP) hot-applies the filter, skills, system prompt and LLM settings; `api.listen`, `data.dir` and the WhatsApp account need a full restart. See `cogriaclaw help` for everything.
 
 ## Configuration
 
@@ -97,7 +125,7 @@ curl -XPOST localhost:8787/trigger -H "Authorization: Bearer $TOKEN" \
 
 ## Disclaimer
 
-cogriaclaw is **not affiliated with** WhatsApp, Meta, or Anthropic. It uses the third-party [whatsmeow](https://github.com/tulir/whatsmeow) library to interact with WhatsApp's web protocol; running this software may violate WhatsApp's Terms of Service and could result in account suspension. Provided "as is" without warranty (see [LICENSE](./LICENSE)). Intended for personal, educational, and authorized-automation use only — not for unsolicited mass messaging.
+CogriaClaw is **not affiliated with** WhatsApp, Meta, or Anthropic. It uses the third-party [whatsmeow](https://github.com/tulir/whatsmeow) library to interact with WhatsApp's web protocol; running this software may violate WhatsApp's Terms of Service and could result in account suspension. Provided "as is" without warranty (see [LICENSE](./LICENSE)). Intended for personal, educational, and authorized-automation use only — not for unsolicited mass messaging.
 
 ## License
 

@@ -1,4 +1,4 @@
-# cogriaclaw documentation
+# CogriaClaw documentation
 
 - [Operations Guide](./operations.md) — what it does, install, the commands, logs, updating, troubleshooting.
 - [Configuration](./configuration.md) — the config file, and how to change the LLM model / provider / parameters.
